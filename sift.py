@@ -1,15 +1,14 @@
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 
 import gauss_filter
 from keypoint import Keypoint
-from util import nearest_neighbor_sampling
-import operator
+from util import nearest_neighbor_sampling, calc_center_hessian, calc_center_gradient
 
 
 def get_dog(picture: np.ndarray, octaves_number: int = None, octaves_size: int = 3, min_sigma: float = 0.8,
-            delta: float = 0.5) -> list[list[np.ndarray]]:
+            delta: float = 0.5) -> (list[list[np.ndarray]], list[list[np.ndarray]]):
     h, w = picture.shape
     if octaves_number is None:
         octaves_number = int(np.log2(np.min(h, w))) - 3
@@ -24,10 +23,11 @@ def get_dog(picture: np.ndarray, octaves_number: int = None, octaves_size: int =
     dog = [[gaussian_pyramid[octave][pos + 1] - gaussian_pyramid[octave][pos] for pos in
             range(octaves_size - 1)] for
            octave in range(octaves_number)]
-    return dog
+    return dog, gaussian_pyramid
 
 
-def get_keypoints(dog: list[list[np.ndarray]]) -> list[Keypoint]:
+def get_keypoints(dog: list[list[np.ndarray]], gaussian_pyramid: list[list[np.ndarray]], peak_thr: float = 0.8) -> list[
+    Keypoint]:
     ###what to do with  type ? to[0,1] or just int ?
     keypoints = []
     for octave_index, octave in enumerate(dog):
@@ -49,8 +49,67 @@ def get_keypoints(dog: list[list[np.ndarray]]) -> list[Keypoint]:
                                                             len(octave) - 3, octave, 0.5)
                         if localize_result is not None:
                             keypoint, localized_image_index = localize_result
-                            keypoints.append(keypoint)
+                            orientation_max, hist = get_keypoint_main_orientation(keypoint,
+                                                                                  gaussian_pyramid[octave_index][
+                                                                                      localized_image_index].astype(
+                                                                                      np.float32) / 255,
+                                                                                  octave_index)
+
+                            keypoints += get_oriented_keypoints(keypoint, hist, orientation_max, peak_thr)
     return keypoints
+
+
+def get_oriented_keypoints(keypoint: Keypoint, hist: np.ndarray, orientation_max: float, peak_thr: float) -> list[
+    Keypoint]:
+    oriented_keypoints = []
+    bins_number = len(hist)
+    threshold_max_peak = orientation_max * peak_thr
+    for i in range(bins_number):
+        left_peak = hist[i - 1]
+        right_peak = hist[(i + 1) % bins_number]
+        center_peak = hist[i]
+        if left_peak < center_peak < right_peak and right_peak > threshold_max_peak:
+            # https: // ccrma.stanford.edu / ~jos / sasp / Quadratic_Interpolation_Spectral_Peaks.html 6.30
+            interpolated_bin = (i + 0.5 * (left_peak - right_peak) / (
+                    left_peak - 2 * center_peak + right_peak)) % bins_number
+            angle = interpolated_bin * 360 / bins_number
+            oriented_keypoint = Keypoint(pos_x=keypoint.pos_x, pos_y=keypoint.pos_y, size=keypoint.size,
+                                         response=keypoint.response, angle=angle)
+            oriented_keypoints.append(oriented_keypoint)
+    return oriented_keypoints
+
+
+def get_keypoint_main_orientation(keypoint: Keypoint, gaussian_image: np.ndarray, octave_index: int,
+                                  hist_bin_number: int = 36) -> (
+        float, np.ndarray):
+    scale = keypoint.size * 1.5 / np.float32(2 ** (octave_index + 1))
+    radius = int(round(scale * 2))
+    weight_factor = -0.5 * (scale ** -2)
+    hist = np.zeros(hist_bin_number)
+    img_h, img_w = gaussian_image.shape
+    for i in range(-radius, radius + 1):
+        y = int(keypoint.pos_y / np.float32(2 ** octave_index)) + i
+        if 0 < y < img_h - 1:
+            for j in range(-radius, radius + 1):
+                x = int(keypoint.pos_x / np.float32(2 ** octave_index)) + j
+                if 0 < x < img_w - 1:
+                    dx = gaussian_image[y, x + 1] - gaussian_image[y, x - 1]
+                    dy = gaussian_image[y + 1, x] - gaussian_image[y - 1, x]
+                    magnitude = np.sqrt(dx ** 2 + dy ** 2)
+                    orientation = np.rad2deg(np.arctan2(dy, dx))
+                    weight = np.exp(weight_factor * (i ** 2 + j ** 2))
+                    hist_index = int(np.round(orientation * hist_bin_number / 360)) % hist_bin_number
+                    hist[hist_index] += magnitude * weight
+    smooth_hist = np.array(
+        [6 * hist[n] + hist[n - 1] + hist[n - 2] + 4 * hist[(n + 1) % hist_bin_number] + hist[(n + 2) % hist_bin_number] for n in
+         range(hist_bin_number)])
+    smooth_hist *= 1 / 16
+    orientation_max = max(smooth_hist)
+    return orientation_max, smooth_hist
+
+
+def generate_descriptor():
+    pass
 
 
 def localize_keypoint(i: int, j: int, image_index: int, octave_index: int, num_intervals: int,
@@ -68,8 +127,9 @@ def localize_keypoint(i: int, j: int, image_index: int, octave_index: int, num_i
                                next_image[i - 1:i + 2, j - 1:j + 2]]).astype('float32') / 255.
         gradient = calc_center_gradient(pixel_cube)
         hessian = calc_center_hessian(pixel_cube)
-        extremum_update = -np.linalg.lstsq(hessian, gradient, rcond=None)[0] # sole, taylor shit, answer is (1,3) vector
-        # https://habr.com/ru/post/106302/
+        extremum_update = -np.linalg.lstsq(hessian, gradient, rcond=None)[
+            0]  # sole, taylor shit, answer is (1,3) vector
+        # http://www.ipol.im/pub/art/2014/82/  3.2
         if abs(extremum_update[0]) < 0.5 and abs(extremum_update[1]) < 0.5 and abs(extremum_update[2]) < 0.5:
             break
         j += int(round(extremum_update[0]))
@@ -92,11 +152,11 @@ def localize_keypoint(i: int, j: int, image_index: int, octave_index: int, num_i
                 (eigenvalue_ratio + 1) ** 2) * xy_hessian_det:
             pos_x = int((j + extremum_update[0]) * (2 ** octave_index))
             pos_y = int((i + extremum_update[1]) * (2 ** octave_index))
-            radius = sigma * (2 ** ((image_index + extremum_update[2]) / np.float32(num_intervals))) * (
+            size = sigma * (2 ** ((image_index + extremum_update[2]) / np.float32(num_intervals))) * (
                     2 ** (octave_index + 1))
             response = abs(response)
 
-            return Keypoint(pos_x, pos_y, radius, response), image_index
+            return Keypoint(pos_x, pos_y, size, response), image_index
     return None
 
 
@@ -110,29 +170,4 @@ def is_scale_extremum(prev_pixels: np.ndarray, cur_pixels: np.ndarray, next_pixe
     return False
 
 
-def calc_center_hessian(pixels: np.ndarray) -> np.ndarray:
-    # f''(x) = f(x + 1) - 2 * f(x) + f(x - 1)
-    # df/dxdy (x,y)  =(f(x + 1, y + 1) - f(x + 1, y - 1) - f(x - 1, y + 1) + f(x - 1, y - 1)) / 4
-    # x - third dim, y - second dim,  scale - first dim
-    # hessian = [dxx, dxy, dxs]
-    #           [dxy, dyy, dys]
-    #           [dxs, dys, dss]
-    dxx = pixels[1, 1, 2] - 2 * pixels[1, 1, 1] + pixels[1, 1, 0]
-    dyy = pixels[1, 2, 1] - 2 * pixels[1, 1, 1] + pixels[1, 0, 1]
-    dss = pixels[2, 1, 1] - 2 * pixels[1, 1, 1] + pixels[0, 1, 1]
-    dxy = (pixels[1, 2, 2] - pixels[1, 2, 0] - pixels[1, 0, 2] + pixels[1, 0, 0]) * 0.25
-    dxs = (pixels[2, 1, 2] - pixels[0, 1, 2] - pixels[2, 1, 0] + pixels[0, 1, 0]) * 0.25
-    dys = (pixels[2, 2, 1] - pixels[2, 0, 1] - pixels[0, 2, 1] + pixels[0, 0, 1]) * 0.25
-    return np.array([[dxx, dxy, dxs],
-                     [dxy, dyy, dys],
-                     [dxs, dys, dss]])
 
-
-def calc_center_gradient(pixels: np.ndarray) -> np.ndarray:
-    # f'(x) = (f(x + 1) - f(x - 1)) / 2
-    # blur - change distance or zooming image so blur is about scale
-    # calc gradient in [1,1,1], x - third dim, y - second dim,  scale - first dim
-    dx = 0.5 * (pixels[1, 1, 2] - pixels[1, 1, 0])
-    dy = 0.5 * (pixels[1, 2, 1] - pixels[1, 0, 1])
-    ds = 0.5 * (pixels[2, 1, 1] - pixels[0, 1, 1])
-    return np.array([dx, dy, ds])
