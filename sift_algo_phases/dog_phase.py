@@ -11,25 +11,25 @@ def generate_sigmas(start_sigma: float, num_intervals: int, num_octaves: int) ->
 
 
 def get_gaussian_pyramid(image: np.ndarray, num_octaves: int, gauss_sigmas: list[list[float]]) -> np.ndarray:
-    images = [nearest_neighbor_sampling(image, 1 << octave_ind) for octave_ind in range(num_octaves)]
     gaussian_pyramid = []
-    for octave_index in range(num_octaves):
-        octave_images = []
-        for gauss_sigma in gauss_sigmas[octave_index]:
-            kernel_size = int(np.ceil(3 * gauss_sigma) * 2 + 1)
-            image = cv2.GaussianBlur(images[octave_index], (kernel_size, kernel_size), sigmaX=gauss_sigma,
-                                     sigmaY=gauss_sigma)
-            octave_images.append(image)
-        gaussian_pyramid.append(octave_images)
+    #images = [nearest_neighbor_sampling(image, 1 << octave_ind) for octave_ind in range(num_octaves)]
     # for octave_index in range(num_octaves):
-    #     gaussian_images_in_octave = [image]
-    #     for gaussian_sigma in gauss_sigmas[octave_index]:
-    #         kernel_size = int(np.ceil(3 * gaussian_sigma) * 2 + 1)
-    #         image = cv2.GaussianBlur(image, (kernel_size, kernel_size), sigmaX=gaussian_sigma, sigmaY=gaussian_sigma)
-    #         gaussian_images_in_octave.append(image)
-    #     gaussian_pyramid.append(gaussian_images_in_octave)
-    #     octave_base = gaussian_images_in_octave[0]
-    #     image = nearest_neighbor_sampling(octave_base, 1 << octave_index)
+    #     octave_images = []
+    #     for gauss_sigma in gauss_sigmas[octave_index]:
+    #         kernel_size = int(np.ceil(3 * gauss_sigma) * 2 + 1)
+    #         image = cv2.GaussianBlur(images[octave_index], (kernel_size, kernel_size), sigmaX=gauss_sigma,
+    #                                  sigmaY=gauss_sigma)
+    #         octave_images.append(image)
+    #     gaussian_pyramid.append(octave_images)
+    for octave_index in range(num_octaves):
+        gaussian_images_in_octave = [image]
+        for gaussian_sigma in gauss_sigmas[octave_index]:
+            kernel_size = int(np.ceil(3 * gaussian_sigma) * 2 + 1)
+            image = cv2.GaussianBlur(image, (kernel_size, kernel_size), sigmaX=gaussian_sigma, sigmaY=gaussian_sigma)
+            gaussian_images_in_octave.append(image)
+        gaussian_pyramid.append(gaussian_images_in_octave)
+        octave_base = gaussian_images_in_octave[0]
+        image = nearest_neighbor_sampling(octave_base, 1 << octave_index)
     return np.array(gaussian_pyramid, dtype=np.ndarray)
 
 

@@ -7,7 +7,7 @@ import numpy as np
 
 def get_keypoints(gaussian_pyramid: np.ndarray, dog_images: np.ndarray, num_intervals: int, sigma,
                   image_border_width: int,
-                  contrast_threshold=0.04):
+                  contrast_threshold):
     thr = np.floor(0.5 * contrast_threshold / num_intervals * 255)  # from OpenCV implementation
     keypoints = []
     for octave_index, dog_images_in_octave in enumerate(dog_images):

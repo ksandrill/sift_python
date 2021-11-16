@@ -10,14 +10,15 @@ from sift_algo_phases.keypoint_phase import get_keypoints
 
 def sift_calculation(image: np.ndarray, octave_number: Optional[int] = None, sigma: float = 1.6,
                      num_intervals: int = 3,
-                     image_border_width: int = 5) -> (list[Keypoint], np.ndarray):
+                     image_border_width: int = 5, contrast_threshold=0.04) -> (list[Keypoint], np.ndarray):
     if octave_number is None:
         octave_number = compute_octave_number(image.shape)
     gaussian_sigmas = generate_sigmas(sigma, num_intervals, octave_number)
     image = image.astype(np.float32)
     gaussian_pyramid = get_gaussian_pyramid(image, octave_number, gaussian_sigmas)
     dog_images = get_dog(gaussian_pyramid)
-    keypoints = get_keypoints(gaussian_pyramid, dog_images, num_intervals, sigma, image_border_width)
+    keypoints = get_keypoints(gaussian_pyramid, dog_images, num_intervals, sigma, image_border_width,
+                              contrast_threshold=contrast_threshold)
     keypoints = remove_duplitcates(keypoints)
     descriptors = get_descriptors(keypoints, gaussian_pyramid)
     return keypoints, descriptors
